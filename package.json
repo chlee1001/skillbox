@@ -1,0 +1,22 @@
+{
+  "name": "skillbox",
+  "version": "0.1.0",
+  "description": "Manage cloned Claude Code skill repos and their project symlinks",
+  "type": "module",
+  "bin": {
+    "skillbox": "src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "18.3.12",
+    "ink-testing-library": "4.0.0"
+  },
+  "dependencies": {
+    "ink": "5.0.1",
+    "react": "18.3.1"
+  }
+}
