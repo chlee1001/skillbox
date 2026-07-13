@@ -1,0 +1,51 @@
+// Git driver for repo management (P3, but the status helper is used by `status`/UI).
+// Uses `git` via Bun's subprocess. Offline-safe: without a fetch we report ahead/behind
+// against the already-known upstream; callers can fetch first for accuracy.
+
+import type { GitState } from "./types.ts";
+
+async function git(cwd: string, args: string[]): Promise<{ ok: boolean; out: string }> {
+  const proc = Bun.spawn(["git", "-C", cwd, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = await new Response(proc.stdout).text();
+  const code = await proc.exited;
+  return { ok: code === 0, out: out.trim() };
+}
+
+export async function gitState(repoPath: string): Promise<GitState> {
+  const isRepo = await git(repoPath, ["rev-parse", "--is-inside-work-tree"]);
+  if (!isRepo.ok) return { kind: "not-git" };
+
+  const dirty = await git(repoPath, ["status", "--porcelain"]);
+  if (dirty.ok && dirty.out.length > 0) return { kind: "dirty" };
+
+  // ahead/behind vs upstream, if an upstream is configured.
+  const counts = await git(repoPath, [
+    "rev-list",
+    "--left-right",
+    "--count",
+    "@{upstream}...HEAD",
+  ]);
+  if (!counts.ok) return { kind: "clean" }; // no upstream configured
+  const [behindStr, aheadStr] = counts.out.split(/\s+/);
+  const behind = Number(behindStr) || 0;
+  const ahead = Number(aheadStr) || 0;
+  if (ahead > 0 && behind > 0) return { kind: "diverged", ahead, behind };
+  if (ahead > 0) return { kind: "ahead", by: ahead };
+  if (behind > 0) return { kind: "behind", by: behind };
+  return { kind: "clean" };
+}
+
+export async function gitPull(repoPath: string): Promise<{ ok: boolean; out: string }> {
+  return git(repoPath, ["pull", "--ff-only"]);
+}
+
+export async function gitClone(url: string, dest: string): Promise<{ ok: boolean; out: string }> {
+  const proc = Bun.spawn(["git", "clone", url, dest], { stdout: "pipe", stderr: "pipe" });
+  const out =
+    (await new Response(proc.stdout).text()) + (await new Response(proc.stderr).text());
+  const code = await proc.exited;
+  return { ok: code === 0, out: out.trim() };
+}
