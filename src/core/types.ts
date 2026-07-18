@@ -11,6 +11,12 @@ export type GitState =
   | { kind: "not-git" }
   | { kind: "unknown" }; // e.g. fetch not run yet
 
+// Repo classification. `external` = a clone of someone else's upstream (we pull, never
+// author). `owned` = ours (we author, must be backed up to a remote). "Unbacked" is NOT
+// a third class — it is the derived state `class === "owned" && !remote`, surfaced by
+// doctor. Kept binary so list/update filters stay stable when a remote is added later.
+export type RepoClass = "external" | "owned";
+
 export interface Skill {
   name: string; // basename of the SKILL.md parent dir
   src: string; // absolute path to that dir (the symlink target)
@@ -27,6 +33,9 @@ export interface Repo {
   isGit: boolean;
   skills: Skill[];
   git: GitState;
+  // Filled by classify.ts (a post-scan pass — scan itself stays fs-only/git-free).
+  class?: RepoClass;
+  remote?: string; // origin URL when one exists; owned && !remote = unbacked
 }
 
 // A link found in a target project's .claude/skills/ dir.
@@ -55,6 +64,7 @@ export interface RawConfig {
   workspace?: string;
   targets?: Record<string, string>;
   ignore?: string[];
+  ownedOwners?: string[]; // git remote owners considered "mine" for repo classification
 }
 
 // Loaded, resolved view used at runtime.
@@ -62,6 +72,7 @@ export interface Config {
   workspace: string; // realpath-canonicalized root folder holding the cloned skill repos
   targets: Record<string, string>; // alias -> project root
   ignore: string[]; // repo dir names to skip (config + .skillboxignore merged)
+  ownedOwners: string[]; // config value or DEFAULT_OWNED_OWNERS
 }
 
 // The install matrix: per skill, its state across every target (Screen B's grid).

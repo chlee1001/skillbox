@@ -16,6 +16,7 @@ import { scanWorkspace, flattenSkills } from "./core/scan.ts";
 import { installSkill, uninstallSkill, statusOfTarget, pruneTarget } from "./core/link.ts";
 import { gitPull, gitClone } from "./core/git.ts";
 import { selectSkills, selectionProblems } from "./core/select.ts";
+import { classifyRepos } from "./core/classify.ts";
 import { basename, join } from "node:path";
 
 function stamp(): string {
@@ -54,10 +55,14 @@ async function main() {
   switch (cmd) {
     case "list": {
       const repos = await scanWorkspace(cfg.workspace, { ignore: cfg.ignore });
+      await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
+      const classFilter = flags.has("owned") ? "owned" : flags.has("external") ? "external" : undefined;
       const filter = positional[0];
       for (const r of repos) {
         if (filter && r.name !== filter) continue;
-        console.log(`\n${r.name}  (${r.skills.length} skills)`);
+        if (classFilter && r.class !== classFilter) continue;
+        const unbacked = r.class === "owned" && !r.remote ? " UNBACKED" : "";
+        console.log(`\n${r.name}  [${r.class}${unbacked}]  (${r.skills.length} skills)`);
         for (const s of r.skills) {
           const tag = s.isContainer ? " [umbrella]" : "";
           const d = s.description ? `  — ${s.description.slice(0, 70)}` : "";

@@ -42,6 +42,13 @@ export async function gitPull(repoPath: string): Promise<{ ok: boolean; out: str
   return git(repoPath, ["pull", "--ff-only"]);
 }
 
+// Origin URL, or undefined when no remote named `origin` exists (or not a git repo).
+// Classification treats "no origin" as an unbacked owned repo — see core/classify.ts.
+export async function getRemoteUrl(repoPath: string): Promise<string | undefined> {
+  const r = await git(repoPath, ["remote", "get-url", "origin"]);
+  return r.ok && r.out ? r.out : undefined;
+}
+
 export async function gitClone(url: string, dest: string): Promise<{ ok: boolean; out: string }> {
   const proc = Bun.spawn(["git", "clone", url, dest], { stdout: "pipe", stderr: "pipe" });
   const out =

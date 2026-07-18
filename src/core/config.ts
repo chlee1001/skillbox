@@ -13,6 +13,10 @@ function configPath(): string {
   return join(base, "skillbox", "config.json");
 }
 
+// Remote owners treated as "mine" when classifying repos (external vs owned).
+// Overridable via config.json `ownedOwners`. See core/classify.ts.
+export const DEFAULT_OWNED_OWNERS = ["chlee1001"];
+
 // Default workspace = the folder this tool lives in one level up (…/claude-skills),
 // overridable by env or config.
 function defaultWorkspace(): string {
@@ -51,7 +55,7 @@ export async function loadConfig(): Promise<Config> {
   const workspace = await resolveReal(raw.workspace ? resolve(raw.workspace) : defaultWorkspace());
   const fileIgnore = await readIgnoreFile(workspace);
   const ignore = [...new Set([...(raw.ignore ?? []), ...fileIgnore])];
-  return { workspace, targets: raw.targets ?? {}, ignore };
+  return { workspace, targets: raw.targets ?? {}, ignore, ownedOwners: raw.ownedOwners ?? DEFAULT_OWNED_OWNERS };
 }
 
 // Persist only the RAW schema — never the canonicalized workspace or file-merged ignore.
