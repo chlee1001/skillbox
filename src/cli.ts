@@ -1,12 +1,15 @@
 #!/usr/bin/env bun
 // Non-interactive CLI. Calls the same headless core as the Ink TUI. Scriptable and testable.
 //
-//   skillbox list [repo]
+//   skillbox list [repo] [--owned|--external]
 //   skillbox install <target> [skill...] [--all] [--copy] [--force] [--repo R]
 //   skillbox uninstall <target> [skill...] [--all]
 //   skillbox status <target>
 //   skillbox prune <target>
-//   skillbox update [repo|--all]
+//   skillbox update [repo|--all|--external]   (bulk pulls external clones only)
+//   skillbox doctor [--fetch]                 (fleet health; exit 0 HEALTHY / 1 WARN)
+//   skillbox inventory [--write]              (fleet table; --write emits INVENTORY.md)
+//   skillbox drift                            (owned pins vs external HEADs; report only)
 //   skillbox add <git-url>
 //   skillbox target add|list|rm ...
 //   skillbox ui                      (Ink TUI)
@@ -19,6 +22,7 @@ import { selectSkills, selectionProblems } from "./core/select.ts";
 import { classifyRepos, reposToPull } from "./core/classify.ts";
 import { runDoctor } from "./core/doctor.ts";
 import { buildInventory, renderInventory } from "./core/inventory.ts";
+import { collectDrift } from "./core/drift.ts";
 import { basename, join } from "node:path";
 import { writeFile } from "node:fs/promises";
 
@@ -209,6 +213,25 @@ async function main() {
       break;
     }
 
+    case "drift": {
+      const repos = await scanWorkspace(cfg.workspace, { includeEmpty: true, ignore: cfg.ignore });
+      await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
+      const rows = await collectDrift(repos);
+      if (rows.length === 0) {
+        console.log("no owned repo declares an upstreams.json — nothing to check");
+        break;
+      }
+      for (const r of rows) {
+        const extra =
+          r.status === "STALE" ? `  (+${r.behind} commits since pin — run the owner's drift-check, then re-pin)` :
+          r.status === "UNKNOWN" ? `  (${r.note})` : "";
+        console.log(`  ${r.status.padEnd(8)} ${r.owner} -> ${r.upstream} @ ${r.pin}${extra}`);
+      }
+      // Detection only — never auto-updates pins or the owning skill.
+      process.exitCode = rows.some((r) => r.status !== "CURRENT") ? 1 : 0;
+      break;
+    }
+
     case "add": {
       const url = positional[0];
       if (!url) return fail("add needs a <git-url>");
@@ -252,12 +275,16 @@ async function main() {
     default:
       console.log(
         `skillbox — manage cloned skill repos + project symlinks\n\n` +
-          `  list [repo]                        discovered skills\n` +
+          `  list [repo] [--owned|--external]   discovered skills (class-tagged)\n` +
           `  install <target> [skill...] [--all|--repo R] [--copy] [--force]\n` +
           `  uninstall <target> [skill...] [--all]\n` +
           `  status <target>                    what is linked (health)\n` +
           `  prune <target>                     remove our broken links\n` +
-          `  update [repo|--all]                git pull\n` +
+          `  update [repo|--all|--external]     git pull — bulk touches external clones only\n` +
+          `  doctor [--fetch]                   fleet health: unbacked owned, external drift,\n` +
+          `                                     broken links; exit 0 HEALTHY / 1 WARN\n` +
+          `  inventory [--write]                fleet table (skill/class/remote/targets/drift)\n` +
+          `  drift                              owned upstreams.json pins vs external HEADs\n` +
           `  add <git-url>                      clone into workspace\n` +
           `  target add|list|rm <alias> [path]  manage target aliases\n` +
           `  ui                                 interactive TUI\n\n` +

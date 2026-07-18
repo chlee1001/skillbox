@@ -19,6 +19,8 @@ bun link          # 전역 `skillbox` 명령 등록 (선택; 안 하면 `bun src
 
 기본 워크스페이스는 이 폴더의 부모(클론 레포가 모인 곳)다. `SKILLBOX_WORKSPACE`로 재정의한다.
 워크스페이스 루트의 `.skillboxignore`(한 줄에 레포명)로 특정 레포를 목록에서 뺀다.
+레포 분류(external/owned)는 ① 루트 `.skillboxclass`(`<레포명> <external|owned>`) 명시가 최우선,
+② 없으면 git remote origin의 owner로 추론(`ownedOwners` config, 기본 `chlee1001`), ③ remote가 없으면 owned(미백업)로 간주한다.
 
 ## CLI
 
@@ -42,8 +44,16 @@ skillbox uninstall wp --all                       # 우리 링크만 안전 제�
 # 상태 / 청소 / 레포 관리
 skillbox status wp                  # ok / broken / extern(외부) / dir(실폴더)
 skillbox prune wp                   # 원본이 사라진 우리 깨진 링크만 제거
-skillbox update --all               # 전 레포 git pull (링크 자동 최신화)
+skillbox update                     # external 클론만 git pull (owned는 스킵 — 로컬 커밋 보호)
+skillbox update skillbox            # owned는 레포명을 명시해야 pull
 skillbox add https://github.com/org/repo.git   # 워크스페이스에 클론
+
+# fleet 툴링 (external = 남의 upstream 클론, owned = 내 저작)
+skillbox list --owned               # 분류 필터 (--external도 동일; UNBACKED = remote 없는 owned)
+skillbox doctor                     # 미백업 owned · external 드리프트 · 깨진 링크 → exit 0/1
+skillbox doctor --fetch             # 판정 전 upstream fetch (기본은 오프라인 뷰)
+skillbox inventory --write          # 스킬×class×remote×설치처 표 → INVENTORY.md
+skillbox drift                      # owned의 upstreams.json pin vs external HEAD (보고만)
 ```
 
 `<target>` = 별칭 · 경로 · `--user`(전역 유저 스코프).

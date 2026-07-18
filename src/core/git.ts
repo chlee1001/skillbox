@@ -55,6 +55,24 @@ export async function gitFetch(repoPath: string): Promise<{ ok: boolean; out: st
   return git(repoPath, ["fetch", "--quiet"]);
 }
 
+// Expand a (possibly short) rev to a full commit hash; undefined when unknown here.
+export async function revParse(repoPath: string, rev: string): Promise<string | undefined> {
+  const r = await git(repoPath, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]);
+  return r.ok && r.out ? r.out : undefined;
+}
+
+// Commits reachable from `to` but not from `from` — how far `from` lags behind `to`.
+export async function countCommits(
+  repoPath: string,
+  from: string,
+  to: string,
+): Promise<number | undefined> {
+  const r = await git(repoPath, ["rev-list", "--count", `${from}..${to}`]);
+  if (!r.ok) return undefined;
+  const n = Number(r.out);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 export async function gitClone(url: string, dest: string): Promise<{ ok: boolean; out: string }> {
   const proc = Bun.spawn(["git", "clone", url, dest], { stdout: "pipe", stderr: "pipe" });
   const out =
