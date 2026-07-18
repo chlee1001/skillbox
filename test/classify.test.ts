@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseRemoteOwner, readClassManifest, classifyRepos } from "../src/core/classify.ts";
+import { parseRemoteOwner, readClassManifest, classifyRepos, reposToPull } from "../src/core/classify.ts";
 import type { Repo } from "../src/core/types.ts";
 
 let ws: string;
@@ -73,4 +73,32 @@ test(".skillboxclass manifest overrides remote inference, remote still recorded"
   await classifyRepos([r], ws, ["chlee1001"]);
   expect(r.class).toBe("external"); // manifest wins over owned remote
   expect(r.remote).toBe("https://github.com/chlee1001/forced-ext.git");
+});
+
+test("update policy: owned repo with local commits is never bulk-pulled", async () => {
+  const owned = await gitRepo("myrepo", "git@github.com:chlee1001/myrepo.git");
+  const ext = await gitRepo("upstream-clone", "https://github.com/vendor/thing.git");
+  // a local commit that exists nowhere else — the thing a pull must never endanger
+  await writeFile(join(owned.path, "work.md"), "unpushed");
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(
+      ["git", "-C", owned.path, "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    await proc.exited;
+  };
+  await run("add", "-A");
+  await run("commit", "-q", "-m", "local work");
+
+  const repos = await classifyRepos([owned, ext], ws, ["chlee1001"]);
+
+  // bulk (bare / --all / --external): external only, owned reported as skipped
+  const bulk = reposToPull(repos);
+  expect(bulk.pull.map((r) => r.name)).toEqual(["upstream-clone"]);
+  expect(bulk.skipped.map((r) => r.name)).toEqual(["myrepo"]);
+
+  // explicit name = deliberate -> allowed even for owned
+  const explicit = reposToPull(repos, "myrepo");
+  expect(explicit.pull.map((r) => r.name)).toEqual(["myrepo"]);
+  expect(explicit.skipped).toEqual([]);
 });

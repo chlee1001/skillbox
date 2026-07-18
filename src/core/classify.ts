@@ -75,3 +75,16 @@ export async function classifyRepos(
   }
   return repos;
 }
+
+// Which repos `update` may pull. Explicit name = deliberate act -> allowed regardless
+// of class. Bulk update (bare / --all / --external) = external only: owned repos may
+// hold local commits that exist nowhere else, so they are never bulk-pulled — they are
+// returned in `skipped` so the CLI can say why.
+export function reposToPull(repos: Repo[], name?: string): { pull: Repo[]; skipped: Repo[] } {
+  if (name) return { pull: repos.filter((r) => r.isGit && r.name === name), skipped: [] };
+  const gits = repos.filter((r) => r.isGit);
+  return {
+    pull: gits.filter((r) => r.class === "external"),
+    skipped: gits.filter((r) => r.class !== "external"),
+  };
+}

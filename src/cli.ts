@@ -16,7 +16,7 @@ import { scanWorkspace, flattenSkills } from "./core/scan.ts";
 import { installSkill, uninstallSkill, statusOfTarget, pruneTarget } from "./core/link.ts";
 import { gitPull, gitClone } from "./core/git.ts";
 import { selectSkills, selectionProblems } from "./core/select.ts";
-import { classifyRepos } from "./core/classify.ts";
+import { classifyRepos, reposToPull } from "./core/classify.ts";
 import { basename, join } from "node:path";
 
 function stamp(): string {
@@ -154,10 +154,16 @@ async function main() {
 
     case "update": {
       const repos = await scanWorkspace(cfg.workspace, { includeEmpty: true, ignore: cfg.ignore });
-      const which = flags.has("all") || !positional[0]
-        ? repos.filter((r) => r.isGit)
-        : repos.filter((r) => r.name === positional[0]);
-      for (const r of which) {
+      await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
+      // Bulk (bare / --all / --external) pulls external clones only; an explicit repo
+      // name is a deliberate act and pulls regardless of class.
+      const name = flags.has("all") || flags.has("external") ? undefined : positional[0];
+      const { pull, skipped } = reposToPull(repos, name);
+      if (name && pull.length === 0) return fail(`no git repo named ${name}`);
+      for (const r of skipped) {
+        console.log(`  skipped  ${r.name}  (owned — pull explicitly: skillbox update ${r.name})`);
+      }
+      for (const r of pull) {
         const res = await gitPull(r.path);
         console.log(`  ${res.ok ? "pulled " : "FAILED "} ${r.name}  ${res.out.split("\n")[0] ?? ""}`);
       }
