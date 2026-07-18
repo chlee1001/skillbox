@@ -11,12 +11,13 @@
 //   skillbox target add|list|rm ...
 //   skillbox ui                      (Ink TUI)
 
-import { loadConfig, resolveTarget, addTarget, removeTarget, listTargets } from "./core/config.ts";
+import { loadConfig, resolveTarget, addTarget, removeTarget, listTargets, AGENTS } from "./core/config.ts";
 import { scanWorkspace, flattenSkills } from "./core/scan.ts";
 import { installSkill, uninstallSkill, statusOfTarget, pruneTarget } from "./core/link.ts";
 import { gitPull, gitClone } from "./core/git.ts";
 import { selectSkills, selectionProblems } from "./core/select.ts";
 import { classifyRepos, reposToPull } from "./core/classify.ts";
+import { runDoctor } from "./core/doctor.ts";
 import { basename, join } from "node:path";
 
 function stamp(): string {
@@ -167,6 +168,24 @@ async function main() {
         const res = await gitPull(r.path);
         console.log(`  ${res.ok ? "pulled " : "FAILED "} ${r.name}  ${res.out.split("\n")[0] ?? ""}`);
       }
+      break;
+    }
+
+    case "doctor": {
+      const repos = await scanWorkspace(cfg.workspace, { includeEmpty: true, ignore: cfg.ignore });
+      await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
+      // Everywhere we may have planted links: registered aliases + every agent's user scope.
+      const targets = [
+        ...listTargets(cfg),
+        ...Object.keys(AGENTS).map((a) => resolveTarget("--user", cfg, a)),
+      ];
+      const report = await runDoctor(repos, targets, cfg.workspace, { fetch: flags.has("fetch") });
+      for (const f of report.findings) {
+        console.log(`  WARN ${f.check.padEnd(15)} ${f.subject}: ${f.detail}`);
+      }
+      if (report.findings.length) console.log("");
+      console.log(`verdict: ${report.verdict}${flags.has("fetch") ? "" : "  (local-only; --fetch probes upstreams)"}`);
+      process.exitCode = report.verdict === "HEALTHY" ? 0 : 1;
       break;
     }
 

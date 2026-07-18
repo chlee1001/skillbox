@@ -49,6 +49,12 @@ export async function getRemoteUrl(repoPath: string): Promise<string | undefined
   return r.ok && r.out ? r.out : undefined;
 }
 
+// Refresh remote-tracking refs so gitState's ahead/behind is accurate. Network I/O —
+// callers must treat this as optional (doctor's --fetch), never required.
+export async function gitFetch(repoPath: string): Promise<{ ok: boolean; out: string }> {
+  return git(repoPath, ["fetch", "--quiet"]);
+}
+
 export async function gitClone(url: string, dest: string): Promise<{ ok: boolean; out: string }> {
   const proc = Bun.spawn(["git", "clone", url, dest], { stdout: "pipe", stderr: "pipe" });
   const out =
