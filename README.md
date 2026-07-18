@@ -48,12 +48,7 @@ skillbox update                     # external 클론만 git pull (owned는 스�
 skillbox update skillbox            # owned는 레포명을 명시해야 pull
 skillbox add https://github.com/org/repo.git   # 워크스페이스에 클론
 
-# fleet 툴링 (external = 남의 upstream 클론, owned = 내 저작)
-skillbox list --owned               # 분류 필터 (--external도 동일; UNBACKED = remote 없는 owned)
-skillbox doctor                     # 미백업 owned · external 드리프트 · 깨진 링크 → exit 0/1
-skillbox doctor --fetch             # 판정 전 upstream fetch (기본은 오프라인 뷰)
-skillbox inventory --write          # 스킬×class×remote×설치처 표 → INVENTORY.md
-skillbox drift                      # owned의 upstreams.json pin vs external HEAD (보고만)
+# fleet 툴링(list --owned/--external · doctor · inventory · drift) → 아래 "Fleet 관리" 섹션
 ```
 
 `<target>` = 별칭 · 경로 · `--user`(전역 유저 스코프).
@@ -90,6 +85,26 @@ gjc config set skills.enablePiUser true     # 유저 스킬(~/.gjc/agent/skills)
 
 같은 소스 스킬을 여러 에이전트에 **동시 설치**해도 된다(폴더가 달라 공존한다). 에이전트
 프로파일은 `src/core/config.ts`의 `AGENTS` 한 곳에 있다(새 에이전트 = 행 하나 추가).
+
+## Fleet 관리 (external vs owned)
+
+fleet이 커지면 **external**(남의 upstream을 클론해 둔 것)과 **owned**(내가 만든 것)이 섞인다.
+둘은 다루는 법이 다르다 — external은 `pull`로 따라가되 원본은 건드리지 않고, owned는 내가
+`push`로 백업한다. 분류는 위 [설치](#설치)의 규칙을 쓴다(`.skillboxclass` → git remote owner →
+remote 없으면 owned).
+
+| 명령 | 하는 일 |
+|---|---|
+| `skillbox list --owned` · `--external` | 클래스로 거른다. `UNBACKED` 태그는 remote 없는 owned(=백업 안 됨) |
+| `skillbox update` (bare/`--all`/`--external`) | **external만** `git pull`. owned는 건너뛴다(로컬 커밋 보호) — owned는 레포명을 적어야 pull |
+| `skillbox doctor [--fetch]` | fleet 건강을 판정한다 → 미백업 owned · external 로컬오염·드리프트 · 깨진 링크. `exit 0 HEALTHY / 1 WARN`. `--fetch`면 판정 전에 upstream을 실제로 확인한다(기본은 오프라인) |
+| `skillbox inventory [--write]` | 스킬 × class × remote × 설치처 표를 stdout에 찍는다. `--write`면 워크스페이스 `INVENTORY.md`로 저장 |
+| `skillbox drift` | owned의 `upstreams.json` pin(고정 커밋)을 external 현재 HEAD와 견준다. 고치지 않고 **보고만** 한다. CURRENT가 아니면 `exit 1` |
+
+`doctor`는 주기 점검이나 CI에 건다 — exit 1이면 손볼 게 있다는 뜻이고, 특히 백업 안 된 owned를
+잡아준다. `drift`는 owned 스킬이 external 계약에 기댈 때 쓴다 — 이를테면 `design-orchestrator`가
+`insane-design`·`taste-skill`을 pin해 두면 그 upstream이 움직였는지 알려준다(overlay `reabsorb`의
+가벼운 판).
 
 ## TUI
 
@@ -129,15 +144,16 @@ src/cli.ts  비대화형 명령
 ## 개발
 
 ```bash
-bun test                                    # 38개
+bun test                                    # 48개
 bunx tsc --noEmit --noUnusedLocals          # 타입 + 데드코드 체크
 ```
 
 `useInput`은 ink-testing-library + Bun에서 안 돌아간다. 그래서 키보드 로직은 순수 `keymap`
 단위테스트로 덮고, 실제 대화형 조작은 `SMOKE.md`의 수동 TTY 체크리스트로 확인한다.
 
-## 로드맵 (P3)
+## 로드맵
 
-- git `fetch` 배선(대시보드 ahead/behind 정확도)
+- ✅ **fleet 툴링**(external/owned 분류 · `update --external` · `doctor` · `inventory` · `drift`) — 완료
+- git `fetch` 배선: `doctor --fetch`는 됨, 남은 건 TUI 대시보드 ahead/behind 상시 정확도
 - TUI 에이전트 전환 + 타깃 피커(현재 `h`는 첫 타깃 헬스)
 - `bun build --compile` 단일 바이너리
