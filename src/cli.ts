@@ -18,7 +18,9 @@ import { gitPull, gitClone } from "./core/git.ts";
 import { selectSkills, selectionProblems } from "./core/select.ts";
 import { classifyRepos, reposToPull } from "./core/classify.ts";
 import { runDoctor } from "./core/doctor.ts";
+import { buildInventory, renderInventory } from "./core/inventory.ts";
 import { basename, join } from "node:path";
+import { writeFile } from "node:fs/promises";
 
 function stamp(): string {
   const d = new Date();
@@ -186,6 +188,24 @@ async function main() {
       if (report.findings.length) console.log("");
       console.log(`verdict: ${report.verdict}${flags.has("fetch") ? "" : "  (local-only; --fetch probes upstreams)"}`);
       process.exitCode = report.verdict === "HEALTHY" ? 0 : 1;
+      break;
+    }
+
+    case "inventory": {
+      const repos = await scanWorkspace(cfg.workspace, { ignore: cfg.ignore });
+      await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
+      const targets = [
+        ...listTargets(cfg),
+        ...Object.keys(AGENTS).map((a) => resolveTarget("--user", cfg, a)),
+      ];
+      const rows = await buildInventory(repos, targets, cfg.workspace);
+      const md = renderInventory(rows, { date: new Date().toISOString().slice(0, 10), workspace: cfg.workspace });
+      if (flags.has("write")) {
+        const out = join(cfg.workspace, "INVENTORY.md");
+        await writeFile(out, md);
+        console.log(`wrote ${out}\n`);
+      }
+      console.log(md);
       break;
     }
 
