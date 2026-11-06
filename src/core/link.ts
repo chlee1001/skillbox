@@ -23,7 +23,7 @@ import { pathExists, resolveReal } from "./util.ts";
 
 export interface InstallResult {
   skill: string;
-  action: "linked" | "copied" | "refreshed" | "backed-up-and-linked" | "skipped";
+  action: "linked" | "copied" | "already-linked" | "refreshed" | "backed-up-and-linked" | "skipped";
   reason?: string;
 }
 
@@ -86,6 +86,9 @@ export async function installSkill(
     if (tgtReal !== srcReal) {
       return { skill: skill.name, action: "skipped", reason: `occupied by ${tgtReal}` };
     }
+    // Same source: leave it. Removing and recreating only opens a window where a failed
+    // symlink (sandboxed agent, full disk) loses a link that was already correct.
+    if (!opts.copy) return { skill: skill.name, action: "already-linked" };
     await rm(dst);
     return finishInstall(skill, dst, opts, "refreshed");
   }

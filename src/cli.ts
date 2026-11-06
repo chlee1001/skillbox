@@ -1,7 +1,11 @@
 #!/usr/bin/env bun
 // Non-interactive CLI. Calls the same headless core as the Ink TUI. Scriptable and testable.
 //
-//   skillbox list [repo] [--owned|--external]
+//   skillbox list [repo] [--archived|--owned|--external] [--category <name>]
+//   skillbox category [<name> [repo...]] | --off <repo...>
+//   skillbox path <skill|repo:skill>        (print the SKILL.md path; for user-invoked loading)
+//   skillbox always [--off] [skill...]     (manage user-scope links)
+//   skillbox outdated [--offline]          (compare commits with upstream)
 //   skillbox install <target> [skill...] [--all] [--copy] [--force] [--repo R]
 //   skillbox uninstall <target> [skill...] [--all]
 //   skillbox status <target>
@@ -11,25 +15,45 @@
 //   skillbox inventory [--write]              (fleet table; --write emits INVENTORY.md)
 //   skillbox drift                            (owned pins vs external HEADs; report only)
 //   skillbox add <git-url>
+//   skillbox remove <repo> [--force]
 //   skillbox target add|list|rm ...
 //   skillbox ui                      (Ink TUI)
 
 import { loadConfig, resolveTarget, addTarget, removeTarget, listTargets, AGENTS } from "./core/config.ts";
 import { scanWorkspace, flattenSkills } from "./core/scan.ts";
+import { archivedMatches, findArchived } from "./core/archived.ts";
+import { appendRemoved, readRemoved } from "./core/removed.ts";
 import { installSkill, uninstallSkill, statusOfTarget, pruneTarget } from "./core/link.ts";
-import { gitPull, gitClone } from "./core/git.ts";
+import { git, gitPull, gitClone, revParse } from "./core/git.ts";
+import { alwaysTargets, alwaysSrcs, gjcMissingDir } from "./core/always.ts";
+import { collectVersions } from "./core/versions.ts";
+import { resolveReal } from "./core/util.ts";
 import { selectSkills, selectionProblems } from "./core/select.ts";
 import { classifyRepos, reposToPull } from "./core/classify.ts";
+import { applyCategories, readCategories, writeCategories } from "./core/category.ts";
 import { runDoctor } from "./core/doctor.ts";
 import { buildInventory, renderInventory } from "./core/inventory.ts";
 import { collectDrift } from "./core/drift.ts";
 import { basename, join } from "node:path";
-import { writeFile } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+
+async function warnGjc(): Promise<void> {
+  const config = join(homedir(), ".gjc", "agent", "config.yml");
+  const dir = join(homedir(), ".agents", "skills");
+  const text = await readFile(config, "utf8").catch(() => undefined);
+  if (gjcMissingDir(text, dir)) console.log(`  WARN add ${dir} to skills.customDirectories in ${config}`);
+}
 
 function stamp(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function localDate(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 function parseFlags(args: string[]) {
@@ -38,8 +62,8 @@ function parseFlags(args: string[]) {
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--repo") {
-      opts.repo = args[++i];
+    if (a === "--repo" || a === "--category") {
+      opts[a.slice(2)] = args[++i];
     } else if (a === "--user") {
       positional.push(a); // a target keyword, not a flag — resolveTarget handles "--user"
     } else if (a.startsWith("--")) {
@@ -51,31 +75,218 @@ function parseFlags(args: string[]) {
   return { flags, opts, positional };
 }
 
+async function hintArchived(workspace: string, ignore: string[], misses: string[], repo?: string) {
+  if (!misses.length) return;
+  const repos = await scanWorkspace(workspace, { ignore, includeEmpty: true });
+  const entries = await findArchived(repos);
+  const live = new Set((await scanWorkspace(workspace, { includeEmpty: true })).map((r) => r.name));
+  const removed = (await readRemoved(workspace)).filter((entry) => !live.has(entry.name));
+  for (const name of misses) {
+    const parts = name.split(":");
+    const wantedRepo = parts.length > 1 ? parts[0] : repo;
+    const wantedName = parts.length > 1 ? parts[1] : name;
+    for (const entry of archivedMatches(entries, wantedName)) {
+      if (wantedRepo && entry.repo !== wantedRepo) continue;
+      console.error(`  "${name}" is archived: ${entry.repo}/archive/${entry.entry} (archived ${entry.archived ?? "—"}) — restore it first`);
+    }
+    for (const entry of removed) {
+      if (wantedRepo && entry.name !== wantedRepo) continue;
+      if (entry.name === wantedName || entry.skills.includes(wantedName)) {
+        console.error(`  "${name}" was removed: ${entry.name} (removed ${entry.removed}) — restore with: skillbox add ${entry.url}`);
+      }
+    }
+  }
+}
+
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const cfg = await loadConfig();
   const { flags, opts, positional } = parseFlags(rest);
+  if (rest.includes("--category") && !opts.category) return fail("--category needs a name");
   // Which agent's skills dir to target: --codex (.agents/skills) or --gajae (.gjc)
   // else the default claude (.claude/skills).
   const agent = flags.has("codex") ? "codex" : flags.has("gajae") ? "gajae" : "claude";
 
   switch (cmd) {
+    case "category":
     case "list": {
-      const repos = await scanWorkspace(cfg.workspace, { ignore: cfg.ignore });
+      const archived = cmd === "list" && flags.has("archived");
+      const repos = await scanWorkspace(cfg.workspace, { ignore: cfg.ignore, includeEmpty: archived });
+      if (archived) {
+        const entries = await findArchived(repos.filter((repo) => !positional[0] || repo.name === positional[0]));
+        const live = new Set((await scanWorkspace(cfg.workspace, { includeEmpty: true })).map((repo) => repo.name));
+        const removed = (await readRemoved(cfg.workspace)).filter((entry) => !live.has(entry.name) && (!positional[0] || entry.name === positional[0]));
+        const combined = [
+          ...entries.map((entry) => ({ date: entry.archived ?? "9999", entry, kind: "archived" as const })),
+          ...removed.map((entry) => ({ date: entry.removed, entry, kind: "removed" as const })),
+        ].sort((a, b) => b.date.localeCompare(a.date));
+        if (!combined.length) {
+          console.log("archived\n  (none)");
+          break;
+        }
+        console.log(`archived (${combined.length}, newest first)`);
+        const wrap = (names: string[], indent: string, width = 100) => {
+          const lines: string[] = [];
+          let line = "";
+          for (const n of names) {
+            const next = line ? `${line}, ${n}` : n;
+            if (line && indent.length + next.length > width) {
+              lines.push(line + ",");
+              line = n;
+            } else line = next;
+          }
+          if (line) lines.push(line);
+          return lines.join(`\n${indent}`);
+        };
+        const pad = "             ";
+        for (const item of combined) {
+          if (item.kind === "archived") {
+            const e = item.entry;
+            console.log(`\n  ${e.entry}  ·  archived in ${e.repo}/archive/`);
+            console.log(`    dates    ${e.added ?? "—"} → ${e.archived ?? "—"}${e.uncommitted ? "  (uncommitted)" : ""}`);
+            console.log(`    skills   ${wrap(e.skills, pad)}  [${e.skills.length}]`);
+            console.log(`    restore  git mv archive/${e.entry} ${e.entry}   (inside ${e.repo})`);
+          } else {
+            const e = item.entry;
+            console.log(`\n  ${e.name}  ·  removed external repo`);
+            console.log(`    dates    ${e.added} → ${e.removed}`);
+            console.log(`    skills   ${wrap(e.skills, pad)}  [${e.skills.length}]`);
+            console.log(`    restore  skillbox add ${e.url}`);
+          }
+        }
+        break;
+      }
+      if (cmd === "category" && (flags.has("off") || positional.length !== 1)) {
+        const categories = await readCategories(cfg.workspace);
+        const names = new Set(repos.map((r) => r.name));
+        if (flags.has("off")) {
+          if (!positional.length) return fail("category --off needs at least one repo");
+          let changed = false;
+          const messages: string[] = [];
+          for (const name of positional) {
+            if (names.has(name) && categories.delete(name)) {
+              changed = true;
+              messages.push(`  ${name} -> (no category)`);
+            } else messages.push(`  ${name} (no category)`);
+          }
+          if (changed) await writeCategories(cfg.workspace, categories);
+          for (const message of messages) console.log(message);
+        } else if (positional.length > 1) {
+          const [rawCategory, ...repoNames] = positional;
+          const category = rawCategory.trim();
+          if (!category || /[#\r\n]/.test(category)) return fail("category name must be non-empty and cannot contain # or a newline");
+          const unknown = repoNames.filter((name) => !names.has(name));
+          if (unknown.length) {
+            const swapped = names.has(category) ? ` — the category comes first: skillbox category <name> <repo...>` : "";
+            return fail(`unknown repos: ${unknown.join(", ")}${swapped}`);
+          }
+          if (repoNames.some((name) => /[\s#]/.test(name))) return fail("repo names cannot contain whitespace or # in the category manifest");
+          for (const name of repoNames) categories.set(name, category);
+          await writeCategories(cfg.workspace, categories);
+          for (const name of repoNames) console.log(`  ${name} -> ${category}`);
+        } else {
+          const groups = new Map<string, typeof repos>();
+          for (const repo of repos) {
+            const category = categories.get(repo.name);
+            if (category) groups.set(category, [...(groups.get(category) ?? []), repo]);
+          }
+          for (const [category, group] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+            console.log(category);
+            for (const repo of group) console.log(`  ${repo.name}  (${repo.skills.length} skills)`);
+          }
+          console.log("(no category)");
+          for (const repo of repos.filter((r) => !categories.has(r.name))) {
+            console.log(`  ${repo.name}  (${repo.skills.length} skills)`);
+          }
+          for (const name of categories.keys()) {
+            if (!names.has(name)) console.log(`  WARN category entry for unknown repo: ${name}`);
+          }
+        }
+        break;
+      }
       await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
+      await applyCategories(repos, cfg.workspace);
+      const srcs = await alwaysSrcs(await alwaysTargets(), cfg.workspace);
       const classFilter = flags.has("owned") ? "owned" : flags.has("external") ? "external" : undefined;
-      const filter = positional[0];
+      const filter = cmd === "list" ? positional[0] : undefined;
+      const categoryFilter = cmd === "category" ? positional[0] : opts.category;
       for (const r of repos) {
         if (filter && r.name !== filter) continue;
         if (classFilter && r.class !== classFilter) continue;
+        if (categoryFilter !== undefined && r.category !== categoryFilter) continue;
         const unbacked = r.class === "owned" && !r.remote ? " UNBACKED" : "";
-        console.log(`\n${r.name}  [${r.class}${unbacked}]  (${r.skills.length} skills)`);
+        console.log(`\n${r.name}  [${r.class}${unbacked}${r.remote ? " " + r.remote : ""}]${r.category ? ` {${r.category}}` : ""}  (${r.skills.length} skills)`);
         for (const s of r.skills) {
           const tag = s.isContainer ? " [umbrella]" : "";
           const d = s.description ? `  — ${s.description.slice(0, 70)}` : "";
-          console.log(`  ${s.name}${tag}${d}`);
+          console.log(`  ${s.name}${tag}${srcs.has(await resolveReal(s.src)) ? " [always]" : ""}${d}`);
         }
       }
+      break;
+    }
+
+    case "path": {
+      const names = positional;
+      if (names.length !== 1) return fail("path needs exactly one <skill|repo:skill>");
+      const all = flattenSkills(await scanWorkspace(cfg.workspace, { ignore: cfg.ignore }));
+      const inRepo = all.filter((s) => s.repo === names[0]);
+      if (inRepo.length === 1 && !all.some((s) => s.name === names[0])) {
+        console.error(`  repo "${names[0]}" has one skill: ${inRepo[0].name}`);
+        console.log(join(inRepo[0].src, "SKILL.md"));
+        break;
+      }
+      if (inRepo.length > 1 && !all.some((s) => s.name === names[0])) {
+        console.error(`  "${names[0]}" is a repo — pick the skill that fits the request:`);
+        for (const s of inRepo) {
+          const rel = s.src.slice(s.src.lastIndexOf(`/${s.repo}/`) + s.repo.length + 2);
+          console.error(`  ${s.repo}:${rel}  — ${s.description ?? ""}`.slice(0, 160));
+        }
+        return fail("refused — rerun with one of the above");
+      }
+      const sel = selectSkills(all, names);
+      const problems = selectionProblems(sel);
+      if (problems.length) {
+        await hintArchived(cfg.workspace, cfg.ignore, sel.misses);
+        for (const p of problems) console.error(`  ${p}`);
+        return fail("refused — resolve the above and retry");
+      }
+      console.log(join(sel.chosen[0].src, "SKILL.md"));
+      break;
+    }
+
+    case "always": {
+      const targets = await alwaysTargets();
+      const all = flattenSkills(await scanWorkspace(cfg.workspace, { ignore: cfg.ignore }));
+      if (positional.length === 0) {
+        if (flags.has("off")) return fail("always --off needs at least one skill");
+        for (const target of targets) {
+          console.log(target.skillsDir);
+          const srcs = await alwaysSrcs([target], cfg.workspace);
+          for (const sk of all) {
+            if (srcs.has(await resolveReal(sk.src))) console.log(`  ${sk.name}  (${sk.repo})`);
+          }
+        }
+      } else {
+        const sel = selectSkills(all, positional);
+        const problems = selectionProblems(sel);
+        if (problems.length) {
+          await hintArchived(cfg.workspace, cfg.ignore, sel.misses);
+          for (const p of problems) console.error(`  ${p}`);
+          return fail("refused — resolve the above and retry");
+        }
+        if (sel.chosen.length === 0) return fail("no skills selected");
+        const s = stamp();
+        for (const target of targets) {
+          console.log(target.skillsDir);
+          for (const sk of sel.chosen) {
+            const r = flags.has("off")
+              ? await uninstallSkill(sk.name, target, cfg.workspace, { expectSrc: sk.src })
+              : await installSkill(sk, target, cfg.workspace, { force: flags.has("force"), stamp: s });
+            console.log(`  ${r.action.padEnd(22)} ${sk.name}${r.reason ? `  (${r.reason})` : ""}`);
+          }
+        }
+      }
+      await warnGjc();
       break;
     }
 
@@ -89,6 +300,7 @@ async function main() {
       // Refuse fast on any ambiguity rather than installing the wrong thing.
       const problems = selectionProblems(sel);
       if (problems.length) {
+        await hintArchived(cfg.workspace, cfg.ignore, sel.misses, opts.repo);
         for (const p of problems) console.error(`  ${p}`);
         return fail("refused — resolve the above and retry");
       }
@@ -159,6 +371,22 @@ async function main() {
       break;
     }
 
+    case "outdated": {
+      const repos = await scanWorkspace(cfg.workspace, { includeEmpty: true, ignore: cfg.ignore });
+      await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
+      const rows = await collectVersions(repos, { fetch: !flags.has("offline") });
+      for (const r of rows) {
+        const head = r.head ?? "?";
+        const version = r.head && r.head === r.latest ? head : `${head} -> ${r.latest ?? "?"}`;
+        console.log(`  ${r.status.padEnd(12)} ${r.repo.padEnd(22)} ${version}${r.behind ? `  (+${r.behind})` : ""}  ${r.class ?? "?"}${r.note ? `  (${r.note})` : ""}`);
+      }
+      if (rows.some((r) => r.status === "BEHIND")) {
+        console.log("  external: skillbox update; owned: skillbox update <repo>");
+        process.exitCode = 1;
+      }
+      break;
+    }
+
     case "update": {
       const repos = await scanWorkspace(cfg.workspace, { includeEmpty: true, ignore: cfg.ignore });
       await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
@@ -171,8 +399,12 @@ async function main() {
         console.log(`  skipped  ${r.name}  (owned — pull explicitly: skillbox update ${r.name})`);
       }
       for (const r of pull) {
+        const old = (await revParse(r.path, "HEAD"))?.slice(0, 7) ?? "?";
         const res = await gitPull(r.path);
-        console.log(`  ${res.ok ? "pulled " : "FAILED "} ${r.name}  ${res.out.split("\n")[0] ?? ""}`);
+        const next = (await revParse(r.path, "HEAD"))?.slice(0, 7) ?? "?";
+        if (!res.ok) console.log(`  FAILED   ${r.name}  ${res.out.split("\n")[0] ?? ""}`);
+        else if (old === next) console.log(`  current  ${r.name}  ${old}`);
+        else console.log(`  updated  ${r.name}  ${old} -> ${next}`);
       }
       break;
     }
@@ -232,6 +464,39 @@ async function main() {
       break;
     }
 
+    case "remove": {
+      const name = positional[0];
+      if (!name || positional.length !== 1) return fail("remove needs exactly one <repo>");
+      const repos = await scanWorkspace(cfg.workspace, { ignore: cfg.ignore, includeEmpty: true });
+      const repo = repos.find((r) => r.name === name);
+      if (!repo) return fail(`unknown repo: ${name}`);
+      await classifyRepos([repo], cfg.workspace, cfg.ownedOwners);
+      if (repo.class === "owned") return fail(`${name} is owned — archive it in an owned repo's archive/ folder instead`);
+      const srcs = await alwaysSrcs(await alwaysTargets(), cfg.workspace);
+      for (const skill of repo.skills) {
+        if (srcs.has(await resolveReal(skill.src))) return fail(`${skill.name} is always-on — run skillbox always --off ${skill.name} first`);
+      }
+      if (!flags.has("force")) {
+        if (!repo.isGit) return fail(`${name} is not a git repo — use --force to remove`);
+        const top = await git(repo.path, ["rev-parse", "--show-toplevel"]);
+        if (!top.ok || await resolveReal(top.out) !== await resolveReal(repo.path)) return fail(`${name} is not a git repo — use --force to remove`);
+        const status = await git(repo.path, ["status", "--porcelain"]);
+        if (!status.ok) return fail(`cannot check ${name} working tree: ${status.out}`);
+        if (status.out) return fail(`${name} has a dirty working tree — use --force to remove`);
+        const unpushed = await git(repo.path, ["rev-list", "--all", "--not", "--remotes"]);
+        if (!unpushed.ok) return fail(`cannot check ${name} commits: ${unpushed.out}`);
+        if (unpushed.out) return fail(`${name} has commits not on any remote — use --force to remove`);
+      }
+      const categories = await readCategories(cfg.workspace);
+      const skills = [...new Set(repo.skills.map((skill) => skill.name))].sort((a, b) => a.localeCompare(b));
+      const url = repo.remote ?? "";
+      await appendRemoved(cfg.workspace, { name, url, added: localDate((await stat(repo.path)).birthtime), removed: localDate(new Date()), skills });
+      if (categories.delete(name)) await writeCategories(cfg.workspace, categories);
+      await rm(repo.path, { recursive: true, force: true });
+      console.log(`removed ${name} (${skills.length} skills) -> restore: skillbox add ${url}`);
+      break;
+    }
+
     case "add": {
       const url = positional[0];
       if (!url) return fail("add needs a <git-url>");
@@ -275,7 +540,12 @@ async function main() {
     default:
       console.log(
         `skillbox — manage cloned skill repos + project symlinks\n\n` +
-          `  list [repo] [--owned|--external]   discovered skills (class-tagged)\n` +
+          `  list [repo] [--archived|--owned|--external] [--category <name>]\n` +
+          `  category [<name> [repo...]]        list or assign repo categories\n` +
+          `  category --off <repo...>           remove repo categories\n` +
+          `  path <skill|repo:skill>            print that skill's SKILL.md path\n` +
+          `  always [--off] [skill...]          manage always-on user-scope links\n` +
+          `  outdated [--offline]               compare local commits with upstream\n` +
           `  install <target> [skill...] [--all|--repo R] [--copy] [--force]\n` +
           `  uninstall <target> [skill...] [--all]\n` +
           `  status <target>                    what is linked (health)\n` +
@@ -286,6 +556,7 @@ async function main() {
           `  inventory [--write]                fleet table (skill/class/remote/targets/drift)\n` +
           `  drift                              owned upstreams.json pins vs external HEADs\n` +
           `  add <git-url>                      clone into workspace\n` +
+          `  remove <repo> [--force]            remove an external clone\n` +
           `  target add|list|rm <alias> [path]  manage target aliases\n` +
           `  ui                                 interactive TUI\n\n` +
           `  <target> = path | config alias | --user\n` +

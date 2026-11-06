@@ -54,3 +54,22 @@ test("--all across repos flags a same-name collision instead of clobbering", () 
   expect(sel.collisions).toEqual([{ name: "dup", repos: ["repoA", "repoB"] }]);
   expect(selectionProblems(sel).some((p) => p.includes("collision"))).toBe(true);
 });
+
+test("--all combined with explicit names is refused, not silently expanded to the fleet", () => {
+  const sel = selectSkills(pool, ["alpha"], undefined, true);
+  expect(sel.chosen).toEqual([]); // does NOT link every leaf skill
+  expect(sel.conflict).toBeDefined();
+  expect(selectionProblems(sel).some((p) => p.includes("--all"))).toBe(true);
+});
+
+test("repo:skill with the same name twice in one repo is ambiguous; repo:dir picks one", () => {
+  const twin: Skill[] = [
+    S("hk", "repoD", { src: "/ws/repoD/skills/hk" }),
+    S("hk", "repoD", { src: "/ws/repoD/codex/skills/hk" }),
+  ];
+  const sel = selectSkills(twin, ["repoD:hk"]);
+  expect(sel.chosen).toEqual([]);
+  expect(sel.ambiguous[0].repos).toEqual(["repoD:skills/hk", "repoD:codex/skills/hk"]);
+  const byDir = selectSkills(twin, ["repoD:skills/hk"]);
+  expect(byDir.chosen.map((s) => s.src)).toEqual(["/ws/repoD/skills/hk"]);
+});

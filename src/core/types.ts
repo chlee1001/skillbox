@@ -36,6 +36,7 @@ export interface Repo {
   // Filled by classify.ts (a post-scan pass — scan itself stays fs-only/git-free).
   class?: RepoClass;
   remote?: string; // origin URL when one exists; owned && !remote = unbacked
+  category?: string;
 }
 
 // A link found in a target project's .claude/skills/ dir.
