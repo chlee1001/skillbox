@@ -5,13 +5,15 @@
 //   repo/repo/SKILL.md                (double-nested clone, e.g. korean-privacy-terms)
 
 import { readdir, readFile, stat } from "node:fs/promises";
-import { basename, join, sep } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import type { Repo, Skill } from "./types.ts";
 
 // Never descend into these — they hold no first-class skills and would create noise
 // or huge scans. `references` is excluded because a skill's own docs live there.
+// `archive` holds retired skills kept for history, never installable.
 const PRUNE_DIRS = new Set([
   ".git",
+  "archive",
   "node_modules",
   "references",
   "templates",
@@ -55,19 +57,25 @@ async function findSkillDirs(root: string): Promise<string[]> {
   return found;
 }
 
-// Pull the `description:` line out of SKILL.md YAML frontmatter, best-effort.
-async function readDescription(skillDir: string): Promise<string | undefined> {
+// Pull single-line `name:` / `description:` out of SKILL.md YAML frontmatter, best-effort.
+async function readFrontmatter(skillDir: string): Promise<{ name?: string; description?: string }> {
   try {
     const text = await readFile(join(skillDir, "SKILL.md"), "utf8");
     const fm = text.match(/^---\n([\s\S]*?)\n---/);
     const block = fm ? fm[1] : text.slice(0, 400);
-    const m = block.match(/^description:\s*(.+)$/m);
-    if (!m) return undefined;
-    return m[1].trim().replace(/^["']|["']$/g, "").slice(0, 200);
+    const field = (key: string) => {
+      const m = block.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
+      return m ? m[1].trim().replace(/^["']|["']$/g, "") : undefined;
+    };
+    return { name: field("name"), description: field("description")?.slice(0, 200) };
   } catch {
-    return undefined;
+    return {};
   }
 }
+
+// Repos that keep one skill per tool in `<tool>/skill/SKILL.md` would otherwise all be
+// named "skill" and collide, so a generic folder takes its frontmatter name instead.
+const GENERIC_SKILL_DIRS = new Set(["skill"]);
 
 async function isDir(p: string): Promise<boolean> {
   try {
@@ -85,14 +93,16 @@ export async function scanRepo(repoPath: string): Promise<Repo> {
   for (const d of dirs) {
     // Skill name = the SKILL.md parent dir's basename, unless that IS the repo root
     // (double-nested root SKILL.md) — then use the repo name.
-    const sName = d === repoPath ? name : basename(d);
+    const fm = await readFrontmatter(d);
+    const base = basename(d);
+    const sName = d === repoPath ? name : GENERIC_SKILL_DIRS.has(base) ? (fm.name ?? basename(dirname(d))) : base;
     // Container (umbrella) = another discovered skill lives under this one.
     const isContainer = dirs.some((o) => o !== d && o.startsWith(d + sep));
     skills.push({
       name: sName,
       src: d,
       repo: name,
-      description: await readDescription(d),
+      description: fm.description,
       ...(isContainer ? { isContainer: true } : {}),
     });
   }

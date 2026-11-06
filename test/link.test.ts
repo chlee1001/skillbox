@@ -26,6 +26,8 @@ beforeEach(async () => {
   // repo A also has references/ with a stray md that must NOT be a skill
   await mkdir(join(ws, "repoA", "skills", "alpha", "references"), { recursive: true });
   await writeFile(join(ws, "repoA", "skills", "alpha", "references", "notes.md"), "x");
+  // repo A also keeps a retired skill under archive/ — must NOT be a skill
+  await skill(join(ws, "repoA", "archive", "old", "skills", "gamma"), "gamma");
   // repo B: double-nested root SKILL.md  (repoB/repoB/SKILL.md)
   await skill(join(ws, "repoB", "repoB"), "repoB");
   // repo C: umbrella root SKILL.md + skills/<name> sub-skills (korean-privacy-terms shape)
@@ -48,7 +50,7 @@ test("scan discovers heterogeneous layouts and skips noise", async () => {
 
   const skills = flattenSkills(repos).map((s) => s.name).sort();
   // alpha, beta from flat; repoB from nested root; repoC umbrella + its sub1/sub2.
-  // references/notes.md is NOT a skill.
+  // references/notes.md and archive/**/gamma are NOT skills.
   expect(skills).toEqual(["alpha", "beta", "repoB", "repoC", "sub1", "sub2"]);
 
   // repoC is an umbrella (contains sub-skills); its subs and the flat skills are not.
@@ -56,6 +58,16 @@ test("scan discovers heterogeneous layouts and skips noise", async () => {
   expect(flat.find((s) => s.name === "repoC")!.isContainer).toBe(true);
   expect(flat.find((s) => s.name === "sub1")!.isContainer).toBeUndefined();
   expect(flat.find((s) => s.name === "alpha")!.isContainer).toBeUndefined();
+});
+
+test("a generic skill/ folder is named by its frontmatter, else its parent dir", async () => {
+  await skill(join(ws, "repoD", "git-workflow", "skill"), "git-workflow");
+  await mkdir(join(ws, "repoD", "voice", "skill"), { recursive: true });
+  await writeFile(join(ws, "repoD", "voice", "skill", "SKILL.md"), "# no frontmatter\n");
+  const names = flattenSkills(await scanWorkspace(ws, { ignore: ["repoA", "repoB", "repoC"] }))
+    .map((s) => s.name)
+    .sort();
+  expect(names).toEqual(["git-workflow", "voice"]);
 });
 
 test("scanWorkspace honors the ignore list", async () => {
@@ -83,6 +95,10 @@ test("install symlinks, uninstall removes only our links", async () => {
 
   const st = await lstat(join(target.skillsDir, "alpha"));
   expect(st.isSymbolicLink()).toBe(true);
+
+  const again = await installSkill(alpha, target, ws, { stamp: "T" });
+  expect(again.action).toBe("already-linked");
+  expect((await lstat(join(target.skillsDir, "alpha"))).ino).toBe(st.ino); // not recreated
 
   const u = await uninstallSkill("alpha", target, ws);
   expect(u.action).toBe("unlinked");
