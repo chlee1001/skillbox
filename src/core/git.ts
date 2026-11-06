@@ -4,14 +4,17 @@
 
 import type { GitState } from "./types.ts";
 
-async function git(cwd: string, args: string[]): Promise<{ ok: boolean; out: string }> {
+export async function git(cwd: string, args: string[]): Promise<{ ok: boolean; out: string }> {
   const proc = Bun.spawn(["git", "-C", cwd, ...args], {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const out = await new Response(proc.stdout).text();
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
   const code = await proc.exited;
-  return { ok: code === 0, out: out.trim() };
+  return { ok: code === 0, out: (code === 0 ? stdout : stderr || stdout).trim() };
 }
 
 export async function gitState(repoPath: string): Promise<GitState> {
