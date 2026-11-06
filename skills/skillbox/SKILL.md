@@ -32,7 +32,7 @@ description: "스킬 관리 요청에 쓴다: 스킬 항상 켜기·끄기, 업�
 - 항상 켠 스킬의 설명은 모든 세션의 컨텍스트에 올라간다. 켤 때 이 점을 한 줄로 알린다.
 - external 레포의 파일은 고치지 않는다. 고칠 스킬은 owned 레포로 옮긴다.
 - 직접 만드는 새 스킬은 owned 레포(예: `my-skills`) 안에 `<이름>/SKILL.md`로 만든다. 워크스페이스 안에 있으면 skillbox가 바로 찾는다.
-- 설정은 `~/.config/skillbox/config.json`(워크스페이스, 대상 별칭, `ownedOwners`)과 워크스페이스 루트의 파일들에 있다. `.skillboxclass`는 분류를 직접 지정하고, `.skillboxignore`는 목록에서 뭐 레포, `.skillboxcategory`는 카테고리다. 카테고리는 파일을 직접 고치지 말고 `skillbox category`로 바꾼다.
+- 설정은 `~/.config/skillbox/config.json`(워크스페이스, 대상 별칭, `ownedOwners`)과 워크스페이스 루트의 파일들에 있다. `.skillboxclass`는 분류를 직접 지정하고, `.skillboxignore`는 목록에서 뺄 레포, `.skillboxcategory`는 카테고리다. 카테고리는 파일을 직접 고치지 말고 `skillbox category`로 바꾼다.
 - 쓰기 권한 때문에 명령이 막히면 실행할 명령을 그대로 보여 주고 승인을 받는다.
 - 커밋과 푸시는 사용자가 요청할 때만 한다.
 

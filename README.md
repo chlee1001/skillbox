@@ -18,7 +18,7 @@ bun link          # 전역 `skillbox` 명령 등록 (선택; 안 하면 `bun src
 ```
 
 기본 워크스페이스는 이 폴더의 부모(클론 레포가 모인 곳)다. `SKILLBOX_WORKSPACE`로 재정의한다.
-워크스페이스 루트의 `.skillboxignore`(한 줄에 레포명)로 특정 레포를 목록에서 뮀다.
+워크스페이스 루트의 `.skillboxignore`(한 줄에 레포명)로 특정 레포를 목록에서 뺀다.
 카테고리는 같은 자리의 `.skillboxcategory`(`<레포명> <카테고리>`)에 저장한다. `skillbox category`가 이 파일을 고친다.
 레포 분류(external/owned)는 ① 루트 `.skillboxclass`(`<레포명> <external|owned>`) 명시가 최우선,
 ② 없으면 git remote origin의 owner로 추론(`ownedOwners` config, 기본 `chlee1001`), ③ remote가 없으면 owned(미백업)로 간주한다.
