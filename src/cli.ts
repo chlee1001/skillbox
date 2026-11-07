@@ -1,17 +1,17 @@
 #!/usr/bin/env bun
 // Non-interactive CLI. Calls the same headless core as the Ink TUI. Scriptable and testable.
 //
-//   skillbox list [repo] [--archived|--owned|--external] [--category <name>]
+//   skillbox list [repo] [--archived|--owned|--external] [--category <name>] [--json]
 //   skillbox category [<name> [repo...]] | --off <repo...>
 //   skillbox path <skill|repo:skill>        (print the SKILL.md path; for user-invoked loading)
-//   skillbox always [--off] [skill...]     (manage user-scope links)
-//   skillbox outdated [--offline]          (compare commits with upstream)
+//   skillbox always [--off] [skill...] [--json]  (manage user-scope links)
+//   skillbox outdated [--offline] [--json]       (compare commits with upstream)
 //   skillbox install <target> [skill...] [--all] [--copy] [--force] [--repo R]
 //   skillbox uninstall <target> [skill...] [--all]
 //   skillbox status <target>
 //   skillbox prune <target>
 //   skillbox update [repo|--all|--external]   (bulk pulls external clones only)
-//   skillbox doctor [--fetch]                 (fleet health; exit 0 HEALTHY / 1 WARN)
+//   skillbox doctor [--fetch] [--json]        (fleet health; exit 0 HEALTHY / 1 WARN)
 //   skillbox inventory [--write]              (fleet table; --write emits INVENTORY.md)
 //   skillbox drift                            (owned pins vs external HEADs; report only)
 //   skillbox add <git-url>
@@ -34,16 +34,28 @@ import { applyCategories, readCategories, writeCategories } from "./core/categor
 import { runDoctor } from "./core/doctor.ts";
 import { buildInventory, renderInventory } from "./core/inventory.ts";
 import { collectDrift } from "./core/drift.ts";
+import { printJson, repoEntries, skillRef, type AlwaysChange } from "./core/report.ts";
+import type { Repo, Skill } from "./core/types.ts";
 import { basename, join } from "node:path";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 
-async function warnGjc(): Promise<void> {
+async function gjcWarning(): Promise<string | undefined> {
   const config = join(homedir(), ".gjc", "agent", "config.yml");
   const dir = join(homedir(), ".agents", "skills");
   const text = await readFile(config, "utf8").catch(() => undefined);
-  if (gjcMissingDir(text, dir)) console.log(`  WARN add ${dir} to skills.customDirectories in ${config}`);
+  return gjcMissingDir(text, dir) ? `add ${dir} to skills.customDirectories in ${config}` : undefined;
 }
+
+// Realpath'd srcs of the skills a user-scope link points at, as a sync predicate.
+async function alwaysPredicate(repos: Repo[], workspace: string): Promise<(skill: Skill) => boolean> {
+  const srcs = await alwaysSrcs(await alwaysTargets(), workspace);
+  const on = new Set<string>();
+  for (const skill of flattenSkills(repos)) if (srcs.has(await resolveReal(skill.src))) on.add(skill.src);
+  return (skill) => on.has(skill.src);
+}
+
+const JSON_COMMANDS = new Set(["list", "always", "outdated", "doctor"]);
 
 function stamp(): string {
   const d = new Date();
@@ -103,6 +115,9 @@ async function main() {
   const cfg = await loadConfig();
   const { flags, opts, positional } = parseFlags(rest);
   if (rest.includes("--category") && !opts.category) return fail("--category needs a name");
+  const json = flags.has("json");
+  if (json && !JSON_COMMANDS.has(cmd)) return fail(`--json is supported by ${[...JSON_COMMANDS].join(", ")}`);
+  if (json && flags.has("archived")) return fail("--json does not support --archived");
   // Which agent's skills dir to target: --codex (.agents/skills) or --gajae (.gjc)
   // else the default claude (.claude/skills).
   const agent = flags.has("codex") ? "codex" : flags.has("gajae") ? "gajae" : "claude";
@@ -206,20 +221,25 @@ async function main() {
       }
       await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
       await applyCategories(repos, cfg.workspace);
-      const srcs = await alwaysSrcs(await alwaysTargets(), cfg.workspace);
+      const isAlways = await alwaysPredicate(repos, cfg.workspace);
       const classFilter = flags.has("owned") ? "owned" : flags.has("external") ? "external" : undefined;
       const filter = cmd === "list" ? positional[0] : undefined;
       const categoryFilter = cmd === "category" ? positional[0] : opts.category;
-      for (const r of repos) {
-        if (filter && r.name !== filter) continue;
-        if (classFilter && r.class !== classFilter) continue;
-        if (categoryFilter !== undefined && r.category !== categoryFilter) continue;
+      const shown = repos.filter((r) =>
+        (!filter || r.name === filter) &&
+        (!classFilter || r.class === classFilter) &&
+        (categoryFilter === undefined || r.category === categoryFilter));
+      if (json) {
+        printJson({ workspace: cfg.workspace, repos: repoEntries(shown, isAlways) });
+        break;
+      }
+      for (const r of shown) {
         const unbacked = r.class === "owned" && !r.remote ? " UNBACKED" : "";
         console.log(`\n${r.name}  [${r.class}${unbacked}${r.remote ? " " + r.remote : ""}]${r.category ? ` {${r.category}}` : ""}  (${r.skills.length} skills)`);
         for (const s of r.skills) {
           const tag = s.isContainer ? " [umbrella]" : "";
           const d = s.description ? `  — ${s.description.slice(0, 70)}` : "";
-          console.log(`  ${s.name}${tag}${srcs.has(await resolveReal(s.src)) ? " [always]" : ""}${d}`);
+          console.log(`  ${s.name}${tag}${isAlways(s) ? " [always]" : ""}${d}`);
         }
       }
       break;
@@ -256,9 +276,22 @@ async function main() {
 
     case "always": {
       const targets = await alwaysTargets();
-      const all = flattenSkills(await scanWorkspace(cfg.workspace, { ignore: cfg.ignore }));
+      const repos = await scanWorkspace(cfg.workspace, { ignore: cfg.ignore });
+      const all = flattenSkills(repos);
+      const refOf = (sk: Skill) => skillRef(sk, repos.find((r) => r.name === sk.repo)!);
       if (positional.length === 0) {
         if (flags.has("off")) return fail("always --off needs at least one skill");
+        if (json) {
+          const out = [];
+          for (const target of targets) {
+            const srcs = await alwaysSrcs([target], cfg.workspace);
+            const skills = [];
+            for (const sk of all) if (srcs.has(await resolveReal(sk.src))) skills.push({ name: sk.name, repo: sk.repo, ref: refOf(sk) });
+            out.push({ target: target.skillsDir, skills });
+          }
+          printJson({ targets: out, warning: (await gjcWarning()) ?? null });
+          break;
+        }
         for (const target of targets) {
           console.log(target.skillsDir);
           const srcs = await alwaysSrcs([target], cfg.workspace);
@@ -276,17 +309,24 @@ async function main() {
         }
         if (sel.chosen.length === 0) return fail("no skills selected");
         const s = stamp();
+        const changes: AlwaysChange[] = [];
         for (const target of targets) {
-          console.log(target.skillsDir);
+          if (!json) console.log(target.skillsDir);
           for (const sk of sel.chosen) {
             const r = flags.has("off")
               ? await uninstallSkill(sk.name, target, cfg.workspace, { expectSrc: sk.src })
               : await installSkill(sk, target, cfg.workspace, { force: flags.has("force"), stamp: s });
-            console.log(`  ${r.action.padEnd(22)} ${sk.name}${r.reason ? `  (${r.reason})` : ""}`);
+            changes.push({ target: target.skillsDir, skill: sk.name, ref: refOf(sk), action: r.action, ...(r.reason ? { reason: r.reason } : {}) });
+            if (!json) console.log(`  ${r.action.padEnd(22)} ${sk.name}${r.reason ? `  (${r.reason})` : ""}`);
           }
         }
+        if (json) {
+          printJson({ changes, warning: (await gjcWarning()) ?? null });
+          break;
+        }
       }
-      await warnGjc();
+      const warning = await gjcWarning();
+      if (warning) console.log(`  WARN ${warning}`);
       break;
     }
 
@@ -375,15 +415,17 @@ async function main() {
       const repos = await scanWorkspace(cfg.workspace, { includeEmpty: true, ignore: cfg.ignore });
       await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
       const rows = await collectVersions(repos, { fetch: !flags.has("offline") });
+      if (rows.some((r) => r.status === "BEHIND")) process.exitCode = 1;
+      if (json) {
+        printJson({ fetched: !flags.has("offline"), repos: rows });
+        break;
+      }
       for (const r of rows) {
         const head = r.head ?? "?";
         const version = r.head && r.head === r.latest ? head : `${head} -> ${r.latest ?? "?"}`;
         console.log(`  ${r.status.padEnd(12)} ${r.repo.padEnd(22)} ${version}${r.behind ? `  (+${r.behind})` : ""}  ${r.class ?? "?"}${r.note ? `  (${r.note})` : ""}`);
       }
-      if (rows.some((r) => r.status === "BEHIND")) {
-        console.log("  external: skillbox update; owned: skillbox update <repo>");
-        process.exitCode = 1;
-      }
+      if (rows.some((r) => r.status === "BEHIND")) console.log("  external: skillbox update; owned: skillbox update <repo>");
       break;
     }
 
@@ -418,12 +460,16 @@ async function main() {
         ...Object.keys(AGENTS).map((a) => resolveTarget("--user", cfg, a)),
       ];
       const report = await runDoctor(repos, targets, cfg.workspace, { fetch: flags.has("fetch") });
+      process.exitCode = report.verdict === "HEALTHY" ? 0 : 1;
+      if (json) {
+        printJson({ fetched: flags.has("fetch"), ...report });
+        break;
+      }
       for (const f of report.findings) {
         console.log(`  WARN ${f.check.padEnd(15)} ${f.subject}: ${f.detail}`);
       }
       if (report.findings.length) console.log("");
       console.log(`verdict: ${report.verdict}${flags.has("fetch") ? "" : "  (local-only; --fetch probes upstreams)"}`);
-      process.exitCode = report.verdict === "HEALTHY" ? 0 : 1;
       break;
     }
 
@@ -540,18 +586,18 @@ async function main() {
     default:
       console.log(
         `skillbox — manage cloned skill repos + project symlinks\n\n` +
-          `  list [repo] [--archived|--owned|--external] [--category <name>]\n` +
+          `  list [repo] [--archived|--owned|--external] [--category <name>] [--json]\n` +
           `  category [<name> [repo...]]        list or assign repo categories\n` +
           `  category --off <repo...>           remove repo categories\n` +
           `  path <skill|repo:skill>            print that skill's SKILL.md path\n` +
-          `  always [--off] [skill...]          manage always-on user-scope links\n` +
-          `  outdated [--offline]               compare local commits with upstream\n` +
+          `  always [--off] [skill...] [--json] manage always-on user-scope links\n` +
+          `  outdated [--offline] [--json]      compare local commits with upstream\n` +
           `  install <target> [skill...] [--all|--repo R] [--copy] [--force]\n` +
           `  uninstall <target> [skill...] [--all]\n` +
           `  status <target>                    what is linked (health)\n` +
           `  prune <target>                     remove our broken links\n` +
           `  update [repo|--all|--external]     git pull — bulk touches external clones only\n` +
-          `  doctor [--fetch]                   fleet health: unbacked owned, external drift,\n` +
+          `  doctor [--fetch] [--json]          fleet health: unbacked owned, external drift,\n` +
           `                                     broken links; exit 0 HEALTHY / 1 WARN\n` +
           `  inventory [--write]                fleet table (skill/class/remote/targets/drift)\n` +
           `  drift                              owned upstreams.json pins vs external HEADs\n` +
@@ -559,6 +605,8 @@ async function main() {
           `  remove <repo> [--force]            remove an external clone\n` +
           `  target add|list|rm <alias> [path]  manage target aliases\n` +
           `  ui                                 interactive TUI\n\n` +
+          `  --json   machine-readable stdout for list, always, outdated, doctor;\n` +
+          `           exit codes and stderr errors stay the same\n` +
           `  <target> = path | config alias | --user\n` +
           `  --codex  target Codex skills dir (.agents/skills)   [default: claude .claude/skills]\n` +
           `  --gajae  target gajae-code skills dir (.gjc/skills, ~/.gjc/agent/skills)\n` +
