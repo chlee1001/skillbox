@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { render } from "ink-testing-library";
-import { SkillBrowser, toggleAt, type BrowserApi } from "../../src/ui/SkillBrowser.tsx";
+import { SkillBrowser, alwaysTag, toggleAt, type BrowserApi } from "../../src/ui/SkillBrowser.tsx";
 import type { MatrixRow, Skill, Target } from "../../src/core/types.ts";
 
 // NOTE on approach: ink's useInput is not drivable under ink-testing-library + Bun, so
@@ -22,13 +22,21 @@ const noopApi: BrowserApi = {
 };
 
 test("renders the target header and a glyph per skill state", () => {
-  const { lastFrame } = render(<SkillBrowser rows={rows} targets={[T]} api={noopApi} />);
+  const { lastFrame } = render(<SkillBrowser rows={rows} targets={[T]} always={new Set([rows[0].skill.src])} api={noopApi} />);
   const f = lastFrame() ?? "";
   expect(f).toContain("target:");
   expect(f).toContain("t1");
   expect(f).toContain("[x] alpha"); // linked
+  expect(f).toContain("alpha always (repoA)");
+  expect(f).not.toContain("beta always");
   expect(f).toContain("[ ] beta"); // absent
   expect(f).toContain("[o] sub1"); // covered
+});
+
+test("alwaysTag matches the full source path", () => {
+  const always = new Set(["/ws/repoA/alpha"]);
+  expect(alwaysTag("/ws/repoA/alpha", always)).toBe(" always");
+  expect(alwaysTag("/ws/repoB/alpha", always)).toBe("");
 });
 
 // --- toggleAt: the real link/unlink + reconcile logic (no terminal needed) ---

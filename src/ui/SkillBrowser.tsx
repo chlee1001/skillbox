@@ -32,6 +32,10 @@ export function cellFor(row: MatrixRow, targetKey: string): MatrixCell {
   return row.cells.find((c) => c.targetKey === targetKey) ?? { targetKey, state: "absent" };
 }
 
+export function alwaysTag(src: string, always: Set<string>): string {
+  return always.has(src) ? " always" : "";
+}
+
 // Replace one target column's cells across all rows (the reconcile write).
 export function replaceColumn(rows: MatrixRow[], targetKey: string, cells: MatrixCell[]): MatrixRow[] {
   return rows.map((r, i) => ({ ...r, cells: r.cells.map((c) => (c.targetKey === targetKey ? cells[i] : c)) }));
@@ -58,11 +62,13 @@ export async function toggleAt(
 export function SkillBrowser({
   rows: initialRows,
   targets,
+  always,
   api,
   onBack,
 }: {
   rows: MatrixRow[];
   targets: Target[];
+  always: Set<string>;
   api: BrowserApi; // App injects a cfg-bound api; tests inject a fake
   onBack?: () => void;
 }) {
@@ -124,6 +130,7 @@ export function SkillBrowser({
           return (
             <Text key={r.skill.repo + ":" + r.skill.name} inverse={i === focus}>
               {GLYPH[c.state]} {r.skill.name}
+              <Text dimColor>{alwaysTag(r.skill.src, always)}</Text>
               <Text dimColor> ({r.skill.repo})</Text>
             </Text>
           );

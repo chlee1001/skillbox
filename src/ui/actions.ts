@@ -17,6 +17,10 @@ import {
 import type { InstalledLink } from "../core/types.ts";
 import { gitState, gitPull } from "../core/git.ts";
 import { listTargets, loadConfig } from "../core/config.ts";
+import { classifyRepos } from "../core/classify.ts";
+import { applyCategories } from "../core/category.ts";
+import { alwaysTargets, alwaysSrcs } from "../core/always.ts";
+import { collectVersions, type VersionRow } from "../core/versions.ts";
 
 export async function loadCtx(): Promise<Config> {
   return loadConfig();
@@ -34,7 +38,18 @@ export function targetsOf(cfg: Config): Target[] {
 }
 
 export async function repos(cfg: Config): Promise<Repo[]> {
-  return scanWorkspace(cfg.workspace, { ignore: cfg.ignore, includeEmpty: true });
+  const found = await scanWorkspace(cfg.workspace, { ignore: cfg.ignore, includeEmpty: true });
+  await classifyRepos(found, cfg.workspace, cfg.ownedOwners);
+  await applyCategories(found, cfg.workspace);
+  return found;
+}
+
+export async function alwaysSrcsOf(cfg: Config): Promise<Set<string>> {
+  return alwaysSrcs(await alwaysTargets(), cfg.workspace);
+}
+
+export async function versionsOf(repos: Repo[], fetch: boolean): Promise<VersionRow[]> {
+  return collectVersions(repos, { fetch });
 }
 
 export async function loadMatrix(cfg: Config, targets: Target[]): Promise<InstallMatrix> {

@@ -43,7 +43,7 @@ test("addTarget mutates only `targets`; workspace and ignore stay byte-identical
 });
 
 test("resolveTarget picks the agent's skills dir (claude vs codex)", () => {
-  const cfg: Config = { workspace: "/ws", targets: { wp: "/proj" }, ignore: [] };
+  const cfg: Config = { workspace: "/ws", targets: { wp: "/proj" }, ignore: [], ownedOwners: [] };
 
   // project scope
   expect(resolveTarget("wp", cfg).skillsDir).toBe("/proj/.claude/skills");
