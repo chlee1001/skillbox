@@ -34,10 +34,12 @@ test("browser keys: t switches target, c toggles copy, escape backs out", () => 
   expect(keymap(browser(), "", { escape: true }).type).toBe("back");
 });
 
-test("dashboard keys: enter opens repo, u pulls, h health, r refresh", () => {
+test("dashboard keys: enter opens repo, u pulls, f fetches, h health, r refresh", () => {
   const dash: KeyState = { screen: "dashboard" };
   expect(keymap(dash, "", { return: true }).type).toBe("openRepo");
   expect(keymap(dash, "u", NO_KEY).type).toBe("pull");
+  expect(keymap(dash, "f", NO_KEY).type).toBe("fetch");
+  expect(keymap(browser(), "f", NO_KEY).type).toBe("none");
   expect(keymap(dash, "r", NO_KEY).type).toBe("refresh");
   expect(keymap(dash, "h", NO_KEY).type).toBe("openHealth");
 });

@@ -32,6 +32,7 @@ export type Intent =
   | { type: "openHealth" }
   | { type: "back" }
   | { type: "pull" }
+  | { type: "fetch" }
   | { type: "refresh" }
   | { type: "prune" }
   | { type: "none" };
@@ -63,6 +64,7 @@ export function keymap(state: KeyState, input: string, key: Key): Intent {
     case "dashboard": {
       if (key.return) return { type: "openRepo" };
       if (input === "u") return { type: "pull" };
+      if (input === "f") return { type: "fetch" };
       if (input === "h") return { type: "openHealth" };
       return { type: "none" };
     }

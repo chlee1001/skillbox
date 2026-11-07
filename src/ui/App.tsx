@@ -11,6 +11,7 @@ import { Dashboard } from "./Dashboard.tsx";
 import { Health, crossScopeDuplicates } from "./Health.tsx";
 
 type View = { kind: "dashboard" } | { kind: "browser"; repo: string } | { kind: "health"; entries: InstalledLink[] };
+const dashboardApi = { gitStateFor: actions.gitStateFor, pull: actions.pull, versionsOf: actions.versionsOf };
 
 // Canonical srcs linked (cell state "linked") in any target OTHER than the given key.
 // Keyed by src (not name) so a same-name skill from a different repo isn't falsely flagged.
@@ -28,6 +29,7 @@ function App({ cfg }: { cfg: Config }) {
   const { exit } = useApp();
   const [matrix, setMatrix] = useState<InstallMatrix | null>(null);
   const [repos, setRepos] = useState<Repo[] | null>(null);
+  const [always, setAlways] = useState<Set<string> | null>(null);
   const [targets] = useState<Target[]>(() => actions.targetsOf(cfg));
   const [view, setView] = useState<View>({ kind: "dashboard" });
   const [reloadKey, setReloadKey] = useState(0);
@@ -43,9 +45,10 @@ function App({ cfg }: { cfg: Config }) {
   useEffect(() => {
     void actions.loadMatrix(cfg, targets).then(setMatrix);
     void actions.repos(cfg).then(setRepos);
+    void actions.alwaysSrcsOf(cfg).then(setAlways);
   }, [cfg, targets, reloadKey]);
 
-  if (!matrix || !repos) {
+  if (!matrix || !repos || !always) {
     return (
       <Box paddingX={1}>
         <Text dimColor>scanning {cfg.workspace} …</Text>
@@ -68,7 +71,7 @@ function App({ cfg }: { cfg: Config }) {
       reload();
       setView({ kind: "dashboard" });
     };
-    return <SkillBrowser rows={rows} targets={targets} api={browserApi(cfg)} onBack={back} />;
+    return <SkillBrowser rows={rows} targets={targets} always={always} api={browserApi(cfg)} onBack={back} />;
   }
 
   if (view.kind === "health") {
@@ -90,7 +93,8 @@ function App({ cfg }: { cfg: Config }) {
   return (
     <Dashboard
       repos={repos}
-      api={{ gitStateFor: actions.gitStateFor, pull: actions.pull }}
+      always={always}
+      api={dashboardApi}
       onOpen={(r) => setView({ kind: "browser", repo: r.name })}
       onHealth={() => {
         if (targets.length === 0) return;
