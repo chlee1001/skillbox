@@ -4,6 +4,7 @@
 //   skills/<cat>/<name>/SKILL.md      (catalog style)
 //   repo/repo/SKILL.md                (double-nested clone, e.g. korean-privacy-terms)
 
+import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, join, sep } from "node:path";
 import type { Repo, Skill } from "./types.ts";
@@ -25,7 +26,11 @@ const PRUNE_DIRS = new Set([
 const MAX_DEPTH = 6; // safety bound against pathological trees
 
 // Walk one repo and return the directories that directly contain a SKILL.md.
-async function findSkillDirs(root: string): Promise<string[]> {
+// Agent-tool dirs that some repos use as their ONLY skill location (e.g. ai-job-search keeps
+// everything in `.agents/skills` and `.claude/skills`). Scanned only as a fallback.
+const AGENT_DIRS = new Set([".agents", ".claude"]);
+
+async function findSkillDirs(root: string, includeAgentDirs = false): Promise<string[]> {
   const found: string[] = [];
   async function walk(dir: string, depth: number): Promise<void> {
     if (depth > MAX_DEPTH) return;
@@ -49,7 +54,7 @@ async function findSkillDirs(root: string): Promise<string[]> {
     for (const e of entries) {
       if (!e.isDirectory()) continue;
       if (PRUNE_DIRS.has(e.name)) continue;
-      if (e.name.startsWith(".")) continue;
+      if (e.name.startsWith(".") && !(includeAgentDirs && AGENT_DIRS.has(e.name))) continue;
       await walk(join(dir, e.name), depth + 1);
     }
   }
@@ -88,7 +93,8 @@ async function isDir(p: string): Promise<boolean> {
 // Scan one repo dir into a Repo (git state left as "unknown"; fill via git.ts on demand).
 export async function scanRepo(repoPath: string): Promise<Repo> {
   const name = basename(repoPath);
-  const dirs = await findSkillDirs(repoPath);
+  let dirs = await findSkillDirs(repoPath);
+  if (dirs.length === 0) dirs = await findSkillDirs(repoPath, true);
   const skills: Skill[] = [];
   for (const d of dirs) {
     // Skill name = the SKILL.md parent dir's basename, unless that IS the repo root
@@ -106,6 +112,20 @@ export async function scanRepo(repoPath: string): Promise<Repo> {
       ...(isContainer ? { isContainer: true } : {}),
     });
   }
+  // Repos that ship one copy of a skill per agent tool (career-ops: cursor-directory,
+  // openai-directory, ...) would report the same name N times. Keep the shortest path
+  // among same-name skills whose SKILL.md is byte-identical.
+  const keep = new Map<string, Skill>();
+  const uniq: Skill[] = [];
+  for (const sk of skills.sort((a, b) => a.src.length - b.src.length)) {
+    const body = await readFile(join(sk.src, "SKILL.md"), "utf8").catch(() => "");
+    const key = `${sk.name}\0${createHash("sha1").update(body).digest("hex")}`;
+    if (keep.has(key)) continue;
+    keep.set(key, sk);
+    uniq.push(sk);
+  }
+  skills.length = 0;
+  skills.push(...uniq);
   skills.sort((a, b) => a.name.localeCompare(b.name));
   return {
     name,
