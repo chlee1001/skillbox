@@ -22,6 +22,7 @@ export interface Skill {
   src: string; // absolute path to that dir (the symlink target)
   repo: string; // owning repo name (basename of repo dir)
   description?: string; // parsed from SKILL.md frontmatter, for display
+  note?: string; // user's own one-line character note (config.json `notes`), filled by applyNotes
   // Umbrella skill: its own dir also contains sub-skills (a `skills/` child), so linking
   // it pulls the subs in too. `--all` skips these; install by explicit name only.
   isContainer?: boolean;
@@ -66,6 +67,7 @@ export interface RawConfig {
   targets?: Record<string, string>;
   ignore?: string[];
   ownedOwners?: string[]; // git remote owners considered "mine" for repo classification
+  notes?: Record<string, string>; // skill ref (see skillRef) -> user's one-line note
 }
 
 // Loaded, resolved view used at runtime.
@@ -74,6 +76,7 @@ export interface Config {
   targets: Record<string, string>; // alias -> project root
   ignore: string[]; // repo dir names to skip (config + .skillboxignore merged)
   ownedOwners: string[]; // config value or DEFAULT_OWNED_OWNERS
+  notes: Record<string, string>; // skill ref -> note
 }
 
 // The install matrix: per skill, its state across every target (Screen B's grid).

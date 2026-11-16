@@ -13,6 +13,7 @@ export interface SkillEntry {
   ref: string;
   path: string; // the skill dir (the symlink target)
   description?: string;
+  note?: string; // user's own character note, from config.json `notes`
   umbrella: boolean;
   always: boolean;
 }
@@ -36,6 +37,17 @@ export function skillRef(skill: Skill, repo: Repo): string {
   return `${repo.name}:${dir.includes("/") ? dir : `${dir}/`}`;
 }
 
+// Attach the user's notes (keyed by skillRef) to the scanned skills. Stale refs are ignored.
+export function applyNotes(repos: Repo[], notes: Record<string, string>): Repo[] {
+  for (const repo of repos) {
+    for (const skill of repo.skills) {
+      const ref = skillRef(skill, repo);
+      if (Object.hasOwn(notes, ref)) skill.note = notes[ref];
+    }
+  }
+  return repos;
+}
+
 // `isAlways(skill)` answers whether a user-scope link points at that skill's src.
 export function repoEntries(repos: Repo[], isAlways: (skill: Skill) => boolean): RepoEntry[] {
   return repos.map((repo) => ({
@@ -50,6 +62,7 @@ export function repoEntries(repos: Repo[], isAlways: (skill: Skill) => boolean):
       ref: skillRef(skill, repo),
       path: skill.src,
       description: skill.description,
+      note: skill.note,
       umbrella: Boolean(skill.isContainer),
       always: isAlways(skill),
     })),
