@@ -125,3 +125,20 @@ test("cli note: set, show in list --json and text, survive other config edits, c
   const miss = await cli(["note", "nope", "x"], env);
   expect(miss.code).toBe(2);
 });
+
+test("scan reads folded and literal frontmatter descriptions, and falls back on invalid YAML", async () => {
+  const repo = join(root, "fm");
+  const write = async (name: string, fm: string) => {
+    await mkdir(join(repo, name), { recursive: true });
+    await writeFile(join(repo, name, "SKILL.md"), `---\n${fm}\n---\nbody\n`);
+  };
+  await write("folded", "name: folded\ndescription: >-\n  Builds company websites,\n  not templates.");
+  await write("literal", "name: literal\ndescription: |\n  Line one\n  line two");
+  await write("invalid", "name: invalid\ndescription: Use when: the user asks\nbroken: [unclosed");
+  const byName = Object.fromEntries((await scanRepo(repo)).skills.map((s) => [s.name, s.description]));
+  expect(byName).toEqual({
+    folded: "Builds company websites, not templates.",
+    literal: "Line one line two",
+    invalid: "Use when: the user asks",
+  });
+});
