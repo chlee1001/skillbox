@@ -19,7 +19,7 @@
 //   skillbox target add|list|rm ...
 //   skillbox ui                      (Ink TUI)
 
-import { loadConfig, resolveTarget, addTarget, removeTarget, listTargets, AGENTS } from "./core/config.ts";
+import { loadConfig, resolveTarget, addTarget, removeTarget, setNote, listTargets, AGENTS } from "./core/config.ts";
 import { scanWorkspace, flattenSkills } from "./core/scan.ts";
 import { archivedMatches, findArchived } from "./core/archived.ts";
 import { appendRemoved, readRemoved } from "./core/removed.ts";
@@ -34,7 +34,7 @@ import { applyCategories, readCategories, writeCategories } from "./core/categor
 import { runDoctor } from "./core/doctor.ts";
 import { buildInventory, renderInventory } from "./core/inventory.ts";
 import { collectDrift } from "./core/drift.ts";
-import { printJson, repoEntries, skillRef, type AlwaysChange } from "./core/report.ts";
+import { printJson, repoEntries, skillRef, applyNotes, type AlwaysChange } from "./core/report.ts";
 import type { Repo, Skill } from "./core/types.ts";
 import { basename, join } from "node:path";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -221,6 +221,7 @@ async function main() {
       }
       await classifyRepos(repos, cfg.workspace, cfg.ownedOwners);
       await applyCategories(repos, cfg.workspace);
+      applyNotes(repos, cfg.notes);
       const isAlways = await alwaysPredicate(repos, cfg.workspace);
       const classFilter = flags.has("owned") ? "owned" : flags.has("external") ? "external" : undefined;
       const filter = cmd === "list" ? positional[0] : undefined;
@@ -240,8 +241,35 @@ async function main() {
           const tag = s.isContainer ? " [umbrella]" : "";
           const d = s.description ? `  — ${s.description.slice(0, 70)}` : "";
           console.log(`  ${s.name}${tag}${isAlways(s) ? " [always]" : ""}${d}`);
+          if (s.note) console.log(`      note: ${s.note}`);
         }
       }
+      break;
+    }
+
+    case "note": {
+      const [selector, ...words] = positional;
+      if (!selector) return fail("note needs <skill|repo:skill> [text...] (--off to clear)");
+      const repos = await scanWorkspace(cfg.workspace, { ignore: cfg.ignore });
+      const sel = selectSkills(flattenSkills(repos), [selector]);
+      const problems = selectionProblems(sel);
+      if (problems.length) {
+        for (const p of problems) console.error(`  ${p}`);
+        return fail("refused — resolve the above and retry");
+      }
+      const skill = sel.chosen[0];
+      const ref = skillRef(skill, repos.find((r) => r.name === skill.repo)!);
+      if (flags.has("off")) {
+        console.log((await setNote(ref, undefined)) ? `cleared note for ${ref}` : `no note for ${ref}`);
+        break;
+      }
+      const text = words.join(" ").trim();
+      if (!text) {
+        console.log(cfg.notes[ref] ?? `(no note for ${ref})`);
+        break;
+      }
+      await setNote(ref, text);
+      console.log(`${ref}: ${text}`);
       break;
     }
 
@@ -590,6 +618,7 @@ async function main() {
           `  category [<name> [repo...]]        list or assign repo categories\n` +
           `  category --off <repo...>           remove repo categories\n` +
           `  path <skill|repo:skill>            print that skill's SKILL.md path\n` +
+          `  note <skill|repo:skill> [text] [--off]  show, set or clear your one-line note\n` +
           `  always [--off] [skill...] [--json] manage always-on user-scope links\n` +
           `  outdated [--offline] [--json]      compare local commits with upstream\n` +
           `  install <target> [skill...] [--all|--repo R] [--copy] [--force]\n` +

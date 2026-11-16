@@ -132,6 +132,7 @@ export function SkillBrowser({
               {GLYPH[c.state]} {r.skill.name}
               <Text dimColor>{alwaysTag(r.skill.src, always)}</Text>
               <Text dimColor> ({r.skill.repo})</Text>
+              {r.skill.note ? <Text color="green"> {r.skill.note}</Text> : null}
             </Text>
           );
         })}

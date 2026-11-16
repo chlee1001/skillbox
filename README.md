@@ -35,6 +35,7 @@ skillbox target rm wp
 skillbox list                       # 워크스페이스 전체 스킬
 skillbox list slides-grab           # 한 레포만 ([umbrella] = 하위 스킬을 품은 상위 스킬)
 skillbox path create-prd            # 그 스킬의 SKILL.md 경로 (동명이면 repo:skill)
+skillbox note hallmark "랜딩페이지 특화"   # 스킬 성격 한 줄 메모 (인자 없으면 조회, --off로 삭제)
 
 # 카테고리 (레포 단위, 안 묶어도 된다)
 skillbox category                           # 카테고리별 레포와 묶지 않은 레포
@@ -76,12 +77,14 @@ skillbox list --archived            # 뺀 레포와 보관한 스킬 보기
 `list`, `always`, `outdated`, `doctor`는 `--json`을 붙이면 표준 출력에 JSON 하나를 낸다. 다른 프로그램(예: Herdr 스킬 패널)이 이 출력을 읽는다. 종료 코드와 표준 오류의 에러 문구는 텍스트 출력과 같다. 다른 명령에 붙이면 코드 2로 거부한다. `list --archived --json`도 거부한다.
 
 ```bash
-skillbox list --json        # { workspace, repos: [{ name, path, class, remote, unbacked, category, skills: [{ name, ref, path, description, umbrella, always }] }] }
+skillbox list --json        # { workspace, repos: [{ name, path, class, remote, unbacked, category, skills: [{ name, ref, path, description, note, umbrella, always }] }] }
 skillbox always --json      # { targets: [{ target, skills: [{ name, repo, ref }] }], warning }
 skillbox always <ref> --json        # { changes: [{ target, skill, ref, action, reason? }], warning }
 skillbox outdated --offline --json  # { fetched, repos: [{ repo, class, remote, head, latest, status, behind, ahead, note? }] }
 skillbox doctor --json      # { fetched, findings: [{ check, subject, detail }], verdict }
 ```
+
+`note`는 `skillbox note`로 직접 단 한 줄 성격 메모이고, 없으면 빠진다.
 
 `ref`는 그 스킬 하나만 가리키는 선택자다. `always`, `install`, `path`에 그대로 넘기면 된다. 같은 레포에 이름이 같은 스킬이 여럿 있으면 `im-not-ai:codex/skills/humanize-korean`처럼 레포 안 경로를 쓴다. `description`은 SKILL.md에서 읽은 앞 200자다. 텍스트 출력처럼 70자에서 자르지 않는다.
 

@@ -20,6 +20,7 @@ import { listTargets, loadConfig } from "../core/config.ts";
 import { classifyRepos } from "../core/classify.ts";
 import { applyCategories } from "../core/category.ts";
 import { alwaysTargets, alwaysSrcs } from "../core/always.ts";
+import { applyNotes } from "../core/report.ts";
 import { collectVersions, type VersionRow } from "../core/versions.ts";
 
 export async function loadCtx(): Promise<Config> {
@@ -53,7 +54,8 @@ export async function versionsOf(repos: Repo[], fetch: boolean): Promise<Version
 }
 
 export async function loadMatrix(cfg: Config, targets: Target[]): Promise<InstallMatrix> {
-  const skills = flattenSkills(await scanWorkspace(cfg.workspace, { ignore: cfg.ignore }));
+  const found = await scanWorkspace(cfg.workspace, { ignore: cfg.ignore });
+  const skills = flattenSkills(applyNotes(found, cfg.notes));
   return installMatrix(skills, targets, cfg.workspace);
 }
 

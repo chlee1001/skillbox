@@ -55,7 +55,7 @@ export async function loadConfig(): Promise<Config> {
   const workspace = await resolveReal(raw.workspace ? resolve(raw.workspace) : defaultWorkspace());
   const fileIgnore = await readIgnoreFile(workspace);
   const ignore = [...new Set([...(raw.ignore ?? []), ...fileIgnore])];
-  return { workspace, targets: raw.targets ?? {}, ignore, ownedOwners: raw.ownedOwners ?? DEFAULT_OWNED_OWNERS };
+  return { workspace, targets: raw.targets ?? {}, ignore, ownedOwners: raw.ownedOwners ?? DEFAULT_OWNED_OWNERS, notes: raw.notes ?? {} };
 }
 
 // Persist only the RAW schema — never the canonicalized workspace or file-merged ignore.
@@ -81,6 +81,19 @@ export async function removeTarget(alias: string): Promise<boolean> {
   if (!raw.targets || !(alias in raw.targets)) return false;
   const { [alias]: _drop, ...rest } = raw.targets;
   raw.targets = rest;
+  await saveRawConfig(raw);
+  return true;
+}
+
+// Set (or, with undefined, clear) the note for one skill ref. Touches ONLY `notes`.
+export async function setNote(ref: string, note: string | undefined): Promise<boolean> {
+  const raw = await loadRawConfig();
+  const notes = { ...(raw.notes ?? {}) };
+  if (note === undefined) {
+    if (!(ref in notes)) return false;
+    delete notes[ref];
+  } else notes[ref] = note;
+  raw.notes = notes;
   await saveRawConfig(raw);
   return true;
 }

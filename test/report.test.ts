@@ -101,3 +101,27 @@ test("cli --json: doctor keeps its exit code and rejects unsupported commands", 
   expect(bad.stdout).toBe("");
   expect(bad.stderr).toContain("--json is supported by");
 });
+
+test("cli note: set, show in list --json and text, survive other config edits, clear", async () => {
+  const ws = join(root, "ws");
+  const home = join(root, "home");
+  await skill(join(ws, "repo", "skills", "alpha"), "alpha skill");
+  const env = { HOME: home, XDG_CONFIG_HOME: join(root, "config"), SKILLBOX_WORKSPACE: ws };
+
+  const set = await cli(["note", "repo:alpha", "landing", "page", "specialist"], env);
+  expect(set.code).toBe(0);
+  expect((await cli(["note", "alpha"], env)).stdout.trim()).toBe("landing page specialist");
+
+  const listed = JSON.parse((await cli(["list", "--json"], env)).stdout);
+  expect(listed.repos[0].skills[0].note).toBe("landing page specialist");
+  expect((await cli(["list"], env)).stdout).toContain("note: landing page specialist");
+
+  await cli(["target", "add", "t", "/tmp/x"], env);
+  expect(JSON.parse((await cli(["list", "--json"], env)).stdout).repos[0].skills[0].note).toBe("landing page specialist");
+
+  expect((await cli(["note", "alpha", "--off"], env)).stdout).toContain("cleared");
+  expect(JSON.parse((await cli(["list", "--json"], env)).stdout).repos[0].skills[0].note).toBeUndefined();
+
+  const miss = await cli(["note", "nope", "x"], env);
+  expect(miss.code).toBe(2);
+});
