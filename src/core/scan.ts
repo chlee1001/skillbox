@@ -62,20 +62,30 @@ async function findSkillDirs(root: string, includeAgentDirs = false): Promise<st
   return found;
 }
 
-// Pull single-line `name:` / `description:` out of SKILL.md YAML frontmatter, best-effort.
+// Pull `name:` / `description:` out of SKILL.md YAML frontmatter, best-effort. A real YAML
+// parse handles folded/literal blocks (`description: >-`); frontmatter that is not valid
+// YAML (an unquoted `: ` inside a value is common) falls back to single-line matching.
 async function readFrontmatter(skillDir: string): Promise<{ name?: string; description?: string }> {
+  let text: string;
   try {
-    const text = await readFile(join(skillDir, "SKILL.md"), "utf8");
-    const fm = text.match(/^---\n([\s\S]*?)\n---/);
-    const block = fm ? fm[1] : text.slice(0, 400);
-    const field = (key: string) => {
-      const m = block.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
-      return m ? m[1].trim().replace(/^["']|["']$/g, "") : undefined;
-    };
-    return { name: field("name"), description: field("description")?.slice(0, 200) };
+    text = await readFile(join(skillDir, "SKILL.md"), "utf8");
   } catch {
     return {};
   }
+  const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const block = fm ? fm[1] : text.slice(0, 400);
+  const clean = (v: unknown) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() || undefined : undefined);
+  if (fm) {
+    try {
+      const data = Bun.YAML.parse(block) as Record<string, unknown> | null;
+      if (data && typeof data === "object") return { name: clean(data.name), description: clean(data.description)?.slice(0, 200) };
+    } catch {}
+  }
+  const field = (key: string) => {
+    const m = block.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
+    return m ? m[1].trim().replace(/^["']|["']$/g, "") : undefined;
+  };
+  return { name: field("name"), description: field("description")?.slice(0, 200) };
 }
 
 // Repos that keep one skill per tool in `<tool>/skill/SKILL.md` would otherwise all be
